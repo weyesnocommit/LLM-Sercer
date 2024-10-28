@@ -14,7 +14,8 @@ Sidaa o, walahi e simple reach! Ka daba, sida dhaqso inaad hagaajiso! Follow di 
 ```
 pip install zmq msgpack transformers torch
 ```
-
+Also make u download d models from GOOGLS and puts in models folder AH
+https://drive.google.com/file/d/1Q59CtYZHIDh3D-b6puFsbhoslJFf7ibr/view?usp=sharing
 
 ### 📦 Step Two – Go Fast wit FastT5
 Oya o, go where you put lib/fastT5 and press dis command, sida ninja kuwa weyn o!
