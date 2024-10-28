@@ -1,8 +1,6 @@
 import torch
 torch.set_num_threads(4)
 import zmq
-import re
-import ast
 import msgpack
 from fastT5 import get_onnx_model
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
