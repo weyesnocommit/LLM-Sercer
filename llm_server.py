@@ -5,10 +5,11 @@ import msgpack
 from fastT5 import get_onnx_model
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from config import LLM_SERCER_PORT
+from post_processors import POST_PORCESSORS
 import json
 import time
 import logging
-
+import os
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,33 +18,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+DEFAULT_MODEL = 't5-mihm'
 class TextProcessorServer:
     def __init__(self):
-        self.t5_mihm_v1_name ='./models/t5-base-finetuned-common_gen'
-        self.t5_mihm_v1_name = './models/t5-mihm/'
-        #self.cg_model_name = './t5-mihm-pt'
-        self.t5_mihm_v1_model = get_onnx_model(self.t5_mihm_v1_name, self.t5_mihm_v1_name)
-        #self.t5_mihm_v1_model = AutoModelForSeq2SeqLM.from_pretrained(self.cg_model_name)
-        self.t5_mihm_v1_tok = AutoTokenizer.from_pretrained(self.t5_mihm_v1_name)
-        
-        self.t5_cg_name = './models/t5-base-finetuned-common_gen'
-        self.t5_cg_model = get_onnx_model(self.t5_cg_name, self.t5_cg_name)
-        self.t5_cg_tok = AutoTokenizer.from_pretrained(self.t5_cg_name)
-        
         self.context = zmq.Context()
         self.total_time = 0
         self.run_count = 0
+        self.models = {}
+        self.load_fastt5_models("./models/fastt5")
+
+    def load_fastt5_models(self, directory):
+        """Dynamically load all models and tokenizers in the given directory."""
+        for model_name in os.listdir(directory):
+            model_path = os.path.join(directory, model_name)
+            if os.path.isdir(model_path):
+                try:
+                    model = get_onnx_model(model_path, model_path)
+                    tokenizer = AutoTokenizer.from_pretrained(model_path)
+                    self.models[model_name] = {
+                        'model': model,
+                        'tokenizer': tokenizer,
+                        'generator': self.gen_t5
+                    }
+                    logger.info(f"loddddddddddddddddddddddd '{model_name}' from '{model_path}'")
+                except Exception as e:
+                    logger.error(f"NOTT! '{model_name}' at '{model_path}': {e}")
+
         
-    def gen_t5(self, tokenizer: str, model:str, txt: str, config: dict):
+    def gen_t5(self, model, tokenizer, config: dict, txt: str,):
         if not txt:
-            return "NOTTTTT"
+            return "NOTTT"
+        
         start_time = time.perf_counter()
-        t_input = txt
-        token = getattr(self, tokenizer)(t_input, return_tensors='pt')
-        print("OIYESINFERENCES")
-        tokens = getattr(self, model).generate(
-            input_ids=token['input_ids'],
-            attention_mask=token['attention_mask'],
+        tokenized_input = tokenizer(txt, return_tensors='pt')
+
+        tokens = model.generate(
+            input_ids=tokenized_input['input_ids'],
+            attention_mask=tokenized_input['attention_mask'],
             num_beams=config.get('num_beams', 2),
             temperature=config.get('temperature', 1),
             do_sample=config.get('do_sample', True),
@@ -51,35 +62,39 @@ class TextProcessorServer:
             repetition_penalty=config.get('repetition_penalty', 1.05),
             no_repeat_ngram_size=config.get('no_repeat_ngram_size', 2),
         )
-        output = getattr(self, tokenizer).decode(tokens.squeeze(), skip_special_tokens=True)
+        output = tokenizer.decode(tokens.squeeze(), skip_special_tokens=True)
         end_time = time.perf_counter()
-        # Update total time and count
+
         exec_time = end_time - start_time
         self.total_time += exec_time
         self.run_count += 1
         avg_time = self.total_time / self.run_count
+        logger.info(f"Execution time: {exec_time:.6f}s, Average: {avg_time:.6f}s over {self.run_count} runs")
 
-        logger.info(f"Execution time: {exec_time:.6f} seconds, Average time: {avg_time:.6f} seconds over {self.run_count} runs")
-        
-        return output[2:-2]
+        return output
+
     
-    def gen_t5_cg(self, txt:str, config: dict):
-        return self.gen_t5("t5_cg_tok", "t5_cg_model", txt, config)
-        
-    def gen_t5_mihm_cg(self, txt: str, config: dict):
-        return self.gen_t5("t5_mihm_v1_tok", "t5_mihm_v1_model",  "grammar: " + txt, config)
-
     def gen(self, data: dict):
-        logger.info(data)
         if data['type'] == 'ping':
             return ({'type': 'pong', 'from': 'llm server'})
+        logger.info(data)
         text = data['text']
         config = data.get('config', {})
-        model = data.get('model')
-        if model == "T5-mihm-gc":
-            return self.gen_t5_mihm_cg(text, config)
-        elif model == "T5-cg":
-            return self.gen_t5_cg(text, config)
+        model_name = data.get('model')
+        if model_name in self.models:
+            model = self.models[model_name]['model']
+            tokenizer = self.models[model_name]['tokenizer']
+            out = self.models[model_name]['generator'](model, tokenizer, config, text)
+            if model_name in POST_PORCESSORS:
+                return POST_PORCESSORS[model_name](out)
+            return out
+        else:
+            model = self.models[DEFAULT_MODEL]['model']
+            tokenizer = self.models[DEFAULT_MODEL]['tokenizer']
+            out = self.models[DEFAULT_MODEL]['generator'](model, tokenizer, config, text)
+            if DEFAULT_MODEL in POST_PORCESSORS:
+                return POST_PORCESSORS[DEFAULT_MODEL](out)
+            return out
         return 
         
     def start_server(self):
