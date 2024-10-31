@@ -2,5 +2,5 @@ __pycache__
 *.bat
 models/fastt5/*
 models/pytorch/*
-mdoels/stash/*
+models/stash/*
 .test
