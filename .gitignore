@@ -3,4 +3,5 @@ __pycache__
 models/fastt5/*
 models/pytorch/*
 models/stash/*
+models/torch/*
 .test
