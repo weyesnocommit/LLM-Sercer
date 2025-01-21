@@ -2,8 +2,9 @@ import re
 
 ### t5 mihm
 def t5_mihm(text:str):
-    return text[2:-2]
-
+    if text:
+        return text[2:-2]
+    return None
 
 ### recipmetning
 def parse_generated_recipes(recipe_list):
