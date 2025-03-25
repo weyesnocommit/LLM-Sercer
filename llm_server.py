@@ -11,6 +11,7 @@ import time
 import logging
 import os
 import traceback
+from llama_cpp import Llama
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,7 +34,59 @@ class TextProcessorServer:
         self.models = {}
         self.load_fastt5_models("./models/fastt5")
         self.load_torch_models("./models/torch")
+        self.load_llama_models("./models/llama")
 
+    def load_llama_models(self, directory):
+        """Dynamically load all LlamaCpp models in the given directory."""
+        for model_name in os.listdir(directory):
+            model_path = os.path.join(directory, model_name)
+            if model_path.endswith('.gguf'):
+                try:
+                    model = Llama(
+                        model_path=model_path,
+                        n_ctx=2048,
+                        n_threads=4
+                    )
+                    self.models[model_name.replace('.gguf', '')] = {
+                        'model': model,
+                        'tokenizer': None,  # LlamaCpp handles tokenization internally
+                        'generator': self.gen_llama
+                    }
+                    logger.info(f"Loaded LlamaCpp model '{model_name}' from '{model_path}'")
+                except Exception as e:
+                    logger.error(f"Failed to load LlamaCpp model '{model_name}' at '{model_path}': {e}")
+
+    def gen_llama(self, model: Llama, tokenizer: None, config, txt: str):
+        if not txt:
+            return None
+        start_time = time.perf_counter()
+        generation_config = {
+            "max_tokens": config.get('max_new_tokens', 500),
+            "temperature": config.get('temperature', 1.0),
+            "top_p": config.get('top_p', 1.0),
+            "top_k": config.get('top_k', 50),
+            "repeat_penalty": config.get('repetition_penalty', 1.0),
+            "stop": config.get('stop_sequences', []), 
+            "echo": False, 
+        }
+        
+        try:
+            output = model(
+                prompt=txt,
+                **generation_config
+            )
+            generated_text = output['choices'][0]['text']
+            end_time = time.perf_counter()
+            exec_time = end_time - start_time
+            self.total_time += exec_time
+            self.run_count += 1
+            avg_time = self.total_time / self.run_count
+            logger.info(f"LlamaCpp execution time: {exec_time:.6f}s, Average: {avg_time:.6f}s over {self.run_count} runs")
+            return generated_text
+        except Exception as e:
+            logger.error(f"Error during LlamaCpp generation: {e}")
+            return None
+        
     def load_fastt5_models(self, directory):
         """Dynamically load all models and tokenizers in the given directory."""
         for model_name in os.listdir(directory):
@@ -41,10 +94,12 @@ class TextProcessorServer:
             if os.path.isdir(model_path):
                 try:
                     model = get_onnx_model(model_path, model_path)
-                    tokenizer = AutoTokenizer.from_pretrained(model_path)
+                    tokenizer = AutoTokenizer.from_pretrained(model_path)#, use_fast = True, from_slow = True, legacy = False)
+                    tokenizer_new = AutoTokenizer.from_pretrained(model_path, use_fast = True, from_slow = True, legacy = False)
                     self.models[model_name] = {
                         'model': model,
                         'tokenizer': tokenizer,
+                        'tokenizer_new': tokenizer_new,
                         'generator': self.gen_t5
                     }
                     print(tokenizer.tokenize("<buferia>"))  # Should output ['<buferia>'], not split into subwords
@@ -64,7 +119,7 @@ class TextProcessorServer:
             if os.path.isdir(model_path):
                 try:
                     model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
-                    tokenizer = AutoTokenizer.from_pretrained(model_path)
+                    tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast = True, from_slow = True, legacy = False)
                     self.models[model_name] = {
                         'model': model,
                         'tokenizer': tokenizer,
@@ -77,19 +132,50 @@ class TextProcessorServer:
                 except Exception as e:
                     logger.error(f"NOTT! '{model_name}' at '{model_path}': {e}")
 
-        
+    def truncate_from_start(self, text_, tokenizer, max_length):
+        # Tokenize the input text without truncation
+        task, text = text_.split(":", 1)
+        tokens_t = tokenizer.tokenize(text)
+        task_t = tokenizer.tokenize(task)
+        # If the number of tokens exceeds max_length, truncate from the start
+        if len(tokens_t) > max_length-len(task_t)-1:
+            max_l = max_length-len(task_t)-1-4
+            tokens_t = tokens_t[-max_l:]
+
+        # Convert tokens back to a string
+        truncated_text = tokenizer.convert_tokens_to_string(tokens_t)
+        truncated_text = f"{task}:{truncated_text}"
+        tokens_t = tokenizer.tokenize(truncated_text)
+        if len(tokens_t) > max_length:
+            print(len(tokens_t))
+            print(truncated_text)
+            raise ValueError("XD! ANGERS!")
+        return truncated_text
+    
     def gen_t5(self, model, tokenizer, config: dict, txt: str,):
         if not txt:
             return None#"NOTTT"
-        
+        if config.get("truncate_from_start", False):
+            tmp = self.truncate_from_start(txt, tokenizer, max_length=512)
+            txt = tmp
         start_time = time.perf_counter()
-        tokenized_input = tokenizer(
-            txt, 
-            return_tensors='pt', 
-            padding=False,
-            truncation=True,  # Enables truncation
-            max_length=512    # Specify the maximum length
-        )
+        tokenized_input = []
+        if config.get("new_tokenizer", False):
+            tokenized_input = tokenizer(
+                txt, 
+                return_tensors='pt', 
+                padding=False,
+                truncation=True,
+                max_length=512
+            )   
+        else:
+            tokenized_input = tokenizer(
+                txt, 
+                return_tensors='pt', 
+                padding=False,
+                truncation=True,
+                max_length=512 
+            )
         truncated_text = tokenizer.decode(tokenized_input['input_ids'][0], skip_special_tokens=config.get('skip_special_tokens_in', False))
         print("ACTUL INPUT=================================")
         print(truncated_text)
