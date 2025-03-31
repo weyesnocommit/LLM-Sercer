@@ -12,7 +12,7 @@ Sidaa o, walahi e simple reach! Ka daba, sida dhaqso inaad hagaajiso! Follow di 
 *Bal eeg, waax walbo* - first, make sure say you don install all these dependencies, no try carry last o!
 
 ```
-pip install zmq msgpack transformers torch
+pip install zmq msgpack transformers torch llama-cpp-python
 ```
 
 
